@@ -35,6 +35,8 @@
 
 فایل ZIP نسخه `v2.1.0` را دانلود و روی سرور استخراج کن:
 
+[دانلود Homa Ghost Subscription v2.1.0](dist/Homa-Ghost-Subscription-v2.1.0.zip) · [مشاهده SHA-256](dist/Homa-Ghost-Subscription-v2.1.0.zip.sha256)
+
 ```bash
 unzip Homa-Ghost-Subscription-v2.1.0.zip
 cd Homa-Ghost-Subscription-v2.1.0
