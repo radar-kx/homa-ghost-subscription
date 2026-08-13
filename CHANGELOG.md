@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0
+
+- Added a one-line online installer for new installations and template updates.
+- Added automatic release download, SHA-256 verification, extraction, and handoff to the rollback-safe installer.
+- Added automatic installation of `unzip` on supported Debian, Ubuntu, Fedora, RHEL, and CentOS servers when needed.
+- Updated Persian installation documentation with the one-line command and its safety workflow.
+- Added regression coverage for the online installer's syntax, pinned version, official repository path, checksum verification, and local installer handoff.
+
 ## 2.1.0
 
 - Added V2Box to the Android client catalog while preserving its iOS/iPadOS guide.

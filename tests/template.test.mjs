@@ -15,6 +15,8 @@ const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.dirname(TESTS_DIR);
 const templateSource = await readFile(path.join(PROJECT_DIR, "index.html"), "utf8");
 const qrVendor = await readFile(path.join(PROJECT_DIR, "vendor", "qrcode.js"), "utf8");
+const localInstaller = await readFile(path.join(PROJECT_DIR, "install.sh"), "utf8");
+const onlineInstaller = await readFile(path.join(PROJECT_DIR, "install-online.sh"), "utf8");
 
 const userAgents = {
   Android: "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36",
@@ -385,6 +387,17 @@ test("page has no critical automated accessibility violations", async () => {
 
 test("installer shell syntax is valid", () => {
   execFileSync("bash", ["-n", path.join(PROJECT_DIR, "install.sh")]);
+  assert.match(localInstaller, /HOMA_GHOST_TEMPLATE_DIR/);
+  assert.match(localInstaller, /HOMA_GHOST_BACKUP_ROOT/);
+});
+
+test("one-line installer verifies and hands off the official v2.2.0 package", () => {
+  execFileSync("bash", ["-n", path.join(PROJECT_DIR, "install-online.sh")]);
+  assert.match(onlineInstaller, /VERSION="\$\{HOMA_GHOST_VERSION:-2\.2\.0\}"/);
+  assert.match(onlineInstaller, /radar-kx\/homa-ghost-subscription/);
+  assert.match(onlineInstaller, /sha256sum -c/);
+  assert.match(onlineInstaller, /unzip -q/);
+  assert.match(onlineInstaller, /bash "\$INSTALLER"/);
 });
 
 test("HTTP smoke server serves every state and auxiliary endpoint", async () => {

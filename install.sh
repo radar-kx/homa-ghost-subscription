@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="2.1.0"
-TEMPLATE_DIR="/var/lib/marzban/templates/subscription"
+VERSION="2.2.0"
+TEMPLATE_DIR="${HOMA_GHOST_TEMPLATE_DIR:-/var/lib/marzban/templates/subscription}"
 TEMPLATE_FILE="${TEMPLATE_DIR}/index.html"
 VENDOR_DIR="${TEMPLATE_DIR}/vendor"
 VENDOR_FILE="${VENDOR_DIR}/qrcode.js"
@@ -10,7 +10,7 @@ ENV_FILE="${MARZBAN_ENV_FILE:-/opt/marzban/.env}"
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_FILE="${SOURCE_DIR}/index.html"
 VENDOR_SOURCE="${SOURCE_DIR}/vendor/qrcode.js"
-BACKUP_ROOT="/var/lib/marzban/templates/backups"
+BACKUP_ROOT="${HOMA_GHOST_BACKUP_ROOT:-/var/lib/marzban/templates/backups}"
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 BACKUP_DIR="${BACKUP_ROOT}/homa-ghost-${STAMP}"
 HAD_TEMPLATE=0
@@ -72,7 +72,7 @@ rollback() {
   fi
 
   install -m 0600 -- "${BACKUP_DIR}/marzban.env" "$ENV_FILE"
-  if command -v marzban >/dev/null 2>&1; then
+  if [[ ${HOMA_GHOST_SKIP_RESTART:-0} != 1 ]] && command -v marzban >/dev/null 2>&1; then
     marzban restart >/dev/null 2>&1 || true
   fi
 
@@ -97,7 +97,9 @@ upsert_env() {
 upsert_env "CUSTOM_TEMPLATES_DIRECTORY" '"/var/lib/marzban/templates/"'
 upsert_env "SUBSCRIPTION_PAGE_TEMPLATE" '"subscription/index.html"'
 
-if command -v marzban >/dev/null 2>&1; then
+if [[ ${HOMA_GHOST_SKIP_RESTART:-0} == 1 ]]; then
+  RESTART_MESSAGE="ری‌استارت مرزبان طبق تنظیم محیط اجرا نشد."
+elif command -v marzban >/dev/null 2>&1; then
   marzban restart
   RESTART_MESSAGE="مرزبان ری‌استارت شد و قالب فعال است."
 else
