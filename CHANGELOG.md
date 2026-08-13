@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.3.0
+
+- Added persistent branding and support configuration stored outside the replaceable template directory.
+- Added the Persian `homa-sub` manager with status, configure, update, backup, restore, doctor, and uninstall commands.
+- Added an optional post-install configuration wizard and non-interactive configuration flags.
+- Added safe updates that preserve settings, validate per-file backup checksums, keep three recent copies, and roll back failed installs or restarts.
+- Added usage forecasting with daily average, estimated quota depletion, and 80/90 percent alerts.
+- Added smart renewal prompts for limited, expired, disabled, near-expiry, and high-usage accounts.
+- Added configurable Telegram renewal drafts without exposing the subscription link or configurations.
+- Added a safe diagnostic report with account/device state while excluding URLs, tokens, and proxy configs.
+- Hardened the online installer with exact checksum metadata validation, ZIP traversal, entry-count, expanded-size, and symlink checks.
+- Added migration of the previous inline brand/support/channel settings on first v2.3 installation.
+- Expanded automated coverage to 22 scenarios, including the complete install/configure/update/backup/restore/rollback/migration/uninstall lifecycle and hostile release artifacts.
+- Reverified the Marzban subscription endpoints and V2Box store listings against current official sources.
+
 ## 2.2.0
 
 - Added a one-line online installer for new installations and template updates.

@@ -1,0 +1,607 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+VERSION="2.3.0"
+REPOSITORY="${HOMA_GHOST_REPOSITORY:-radar-kx/homa-ghost-subscription}"
+TEMPLATE_DIR="${HOMA_GHOST_TEMPLATE_DIR:-/var/lib/marzban/templates/subscription}"
+TEMPLATE_FILE="${TEMPLATE_DIR}/index.html"
+VENDOR_FILE="${TEMPLATE_DIR}/vendor/qrcode.js"
+TEMPLATE_CONFIG_FILE="${TEMPLATE_DIR}/config.js"
+CONFIG_DIR="${HOMA_GHOST_CONFIG_DIR:-/etc/homa-ghost-subscription}"
+CONFIG_FILE="${CONFIG_DIR}/config.env"
+ENV_FILE="${MARZBAN_ENV_FILE:-/opt/marzban/.env}"
+BACKUP_ROOT="${HOMA_GHOST_BACKUP_ROOT:-/var/lib/marzban/templates/backups}"
+MANAGER_BIN="${HOMA_GHOST_BIN_PATH:-/usr/local/bin/homa-sub}"
+ONLINE_INSTALLER_URL="${HOMA_GHOST_INSTALLER_URL:-https://raw.githubusercontent.com/${REPOSITORY}/main/install-online.sh}"
+MAX_BACKUPS="${HOMA_GHOST_MAX_BACKUPS:-3}"
+LAST_BACKUP=""
+
+DEFAULT_BRAND_NAME="هما گوست"
+DEFAULT_SUPPORT_URL="https://t.me/YourSupport"
+DEFAULT_CHANNEL_URL="https://t.me/bank_v2ray"
+DEFAULT_PRIMARY_COLOR="#68edc4"
+DEFAULT_LOGO_URL=""
+DEFAULT_RENEWAL_MESSAGE="سلام، برای تمدید اشتراک {username} پیام می‌دهم."
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'هشدار: %s\n' "$*" >&2; }
+fail() { printf 'خطا: %s\n' "$*" >&2; exit 1; }
+
+need_root() {
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then return 0; fi
+  if [[ ${HOMA_GHOST_TEST_MODE:-0} == 1 ]]; then
+    case "$TEMPLATE_DIR:$CONFIG_DIR:$BACKUP_ROOT:$MANAGER_BIN:$ENV_FILE" in
+      /tmp/*:/tmp/*:/tmp/*:/tmp/*:/tmp/*) return 0 ;;
+    esac
+  fi
+  fail "این عملیات باید با دسترسی root اجرا شود."
+}
+
+restart_marzban() {
+  if [[ ${HOMA_GHOST_SKIP_RESTART:-0} == 1 ]]; then
+    return 0
+  fi
+  if command -v marzban >/dev/null 2>&1; then
+    marzban restart
+  else
+    warn "دستور marzban پیدا نشد؛ سرویس را دستی ری‌استارت کن."
+  fi
+}
+
+default_for_key() {
+  case "$1" in
+    BRAND_NAME) printf '%s' "$DEFAULT_BRAND_NAME" ;;
+    SUPPORT_URL) printf '%s' "$DEFAULT_SUPPORT_URL" ;;
+    CHANNEL_URL) printf '%s' "$DEFAULT_CHANNEL_URL" ;;
+    PRIMARY_COLOR) printf '%s' "$DEFAULT_PRIMARY_COLOR" ;;
+    LOGO_URL) printf '%s' "$DEFAULT_LOGO_URL" ;;
+    RENEWAL_MESSAGE) printf '%s' "$DEFAULT_RENEWAL_MESSAGE" ;;
+    *) return 1 ;;
+  esac
+}
+
+config_get() {
+  local wanted="$1" line key value
+  if [[ -f "$CONFIG_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" == *=* ]] || continue
+      key=${line%%=*}
+      value=${line#*=}
+      if [[ "$key" == "$wanted" ]]; then
+        printf '%s' "$value"
+        return 0
+      fi
+    done < "$CONFIG_FILE"
+  fi
+  default_for_key "$wanted"
+}
+
+ensure_config() {
+  install -d -m 0700 -- "$CONFIG_DIR"
+  [[ ! -L "$CONFIG_FILE" ]] || fail "فایل تنظیمات نباید پیوند نمادین باشد."
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    {
+      printf 'BRAND_NAME=%s\n' "$DEFAULT_BRAND_NAME"
+      printf 'SUPPORT_URL=%s\n' "$DEFAULT_SUPPORT_URL"
+      printf 'CHANNEL_URL=%s\n' "$DEFAULT_CHANNEL_URL"
+      printf 'PRIMARY_COLOR=%s\n' "$DEFAULT_PRIMARY_COLOR"
+      printf 'LOGO_URL=%s\n' "$DEFAULT_LOGO_URL"
+      printf 'RENEWAL_MESSAGE=%s\n' "$DEFAULT_RENEWAL_MESSAGE"
+    } > "${CONFIG_FILE}.tmp"
+    chmod 0600 -- "${CONFIG_FILE}.tmp"
+    mv -f -- "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  else
+    chmod 0600 -- "$CONFIG_FILE"
+  fi
+}
+
+validate_single_line() {
+  local label="$1" value="$2"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "${label} نباید چندخطی باشد."
+  if LC_ALL=C grep -q '[[:cntrl:]]' < <(printf '%s' "$value"); then
+    fail "${label} نباید نویسه کنترلی داشته باشد."
+  fi
+}
+
+validate_url() {
+  local label="$1" value="$2" allow_empty="${3:-0}" authority
+  if [[ -z "$value" && "$allow_empty" == 1 ]]; then return 0; fi
+  [[ "$value" =~ ^https://[^[:space:]]+$ ]] || fail "${label} باید یک آدرس معتبر HTTPS باشد."
+  authority="${value#https://}"
+  authority="${authority%%[/?#]*}"
+  [[ -n "$authority" && "$authority" != *@* ]] || fail "${label} نباید نام کاربری یا رمز داخل آدرس داشته باشد."
+}
+
+validate_values() {
+  local brand="$1" support="$2" channel="$3" color="$4" logo="$5" renewal="$6"
+  validate_single_line "نام برند" "$brand"
+  validate_single_line "لینک پشتیبانی" "$support"
+  validate_single_line "لینک کانال" "$channel"
+  validate_single_line "رنگ اصلی" "$color"
+  validate_single_line "لینک لوگو" "$logo"
+  validate_single_line "پیام تمدید" "$renewal"
+  [[ -n "$brand" && ${#brand} -le 60 ]] || fail "نام برند باید بین ۱ تا ۶۰ نویسه باشد."
+  [[ -n "$renewal" && ${#renewal} -le 240 ]] || fail "پیام تمدید باید بین ۱ تا ۲۴۰ نویسه باشد."
+  [[ ${#support} -le 2048 && ${#channel} -le 2048 && ${#logo} -le 2048 ]] || fail "طول لینک تنظیمات نباید بیشتر از ۲۰۴۸ نویسه باشد."
+  validate_url "لینک پشتیبانی" "$support" 1
+  validate_url "لینک کانال" "$channel" 1
+  validate_url "لینک لوگو" "$logo" 1
+  [[ "$color" =~ ^#[0-9A-Fa-f]{6}$ ]] || fail "رنگ اصلی باید مانند #68edc4 باشد."
+}
+
+write_config() {
+  local brand="$1" support="$2" channel="$3" color="$4" logo="$5" renewal="$6" temp
+  ensure_config
+  temp="$(mktemp "${CONFIG_DIR}/config.XXXXXXXX")"
+  chmod 0600 -- "$temp"
+  {
+    printf 'BRAND_NAME=%s\n' "$brand"
+    printf 'SUPPORT_URL=%s\n' "$support"
+    printf 'CHANNEL_URL=%s\n' "$channel"
+    printf 'PRIMARY_COLOR=%s\n' "$color"
+    printf 'LOGO_URL=%s\n' "$logo"
+    printf 'RENEWAL_MESSAGE=%s\n' "$renewal"
+  } > "$temp"
+  mv -f -- "$temp" "$CONFIG_FILE"
+  chmod 0600 -- "$CONFIG_FILE"
+}
+
+json_escape() {
+  local value="$1"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//&/\\u0026}
+  value=${value//</\\u003c}
+  value=${value//>/\\u003e}
+  value=${value//$'\u2028'/\\u2028}
+  value=${value//$'\u2029'/\\u2029}
+  value=${value//$'\t'/\\t}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/}
+  printf '%s' "$value"
+}
+
+render_config() {
+  need_root
+  ensure_config
+  local brand support channel color logo renewal temp
+  brand="$(config_get BRAND_NAME)"
+  support="$(config_get SUPPORT_URL)"
+  channel="$(config_get CHANNEL_URL)"
+  color="$(config_get PRIMARY_COLOR)"
+  logo="$(config_get LOGO_URL)"
+  renewal="$(config_get RENEWAL_MESSAGE)"
+  validate_values "$brand" "$support" "$channel" "$color" "$logo" "$renewal"
+  install -d -m 0755 -- "$TEMPLATE_DIR"
+  temp="$(mktemp "${TEMPLATE_DIR}/config.XXXXXXXX")"
+  {
+    printf 'window.HOMA_GHOST_CUSTOM_CONFIG=Object.freeze({\n'
+    printf '  brandName:"%s",\n' "$(json_escape "$brand")"
+    printf '  supportUrl:"%s",\n' "$(json_escape "$support")"
+    printf '  channelUrl:"%s",\n' "$(json_escape "$channel")"
+    printf '  primaryColor:"%s",\n' "$(json_escape "$color")"
+    printf '  logoUrl:"%s",\n' "$(json_escape "$logo")"
+    printf '  renewalMessage:"%s"\n' "$(json_escape "$renewal")"
+    printf '});\n'
+  } > "$temp"
+  chmod 0644 -- "$temp"
+  mv -f -- "$temp" "$TEMPLATE_CONFIG_FILE"
+}
+
+manifest_value() {
+  local key="$1" manifest="$2" line
+  line="$(grep -m1 -E "^${key}=" "$manifest" 2>/dev/null || true)"
+  printf '%s' "${line#*=}"
+}
+
+copy_if_present() {
+  local source="$1" destination="$2" flag="$3" manifest="$4" digest
+  if [[ -f "$source" ]]; then
+    install -D -m "$(stat -c '%a' "$source")" -- "$source" "$destination"
+    digest="$(sha256sum "$destination" | cut -d' ' -f1)"
+    printf '%s=1\n' "$flag" >> "$manifest"
+    printf '%s_SHA256=%s\n' "$flag" "$digest" >> "$manifest"
+  else
+    printf '%s=0\n' "$flag" >> "$manifest"
+    printf '%s_SHA256=\n' "$flag" >> "$manifest"
+  fi
+}
+
+prune_backups() {
+  [[ "$MAX_BACKUPS" =~ ^[1-9][0-9]*$ ]] || MAX_BACKUPS=3
+  [[ -d "$BACKUP_ROOT" ]] || return 0
+  local -a backups=()
+  local remove_count path candidate
+  while IFS= read -r candidate; do
+    [[ -f "$BACKUP_ROOT/$candidate/manifest" ]] || continue
+    grep -qx 'FORMAT=2' "$BACKUP_ROOT/$candidate/manifest" || continue
+    backups+=("$candidate")
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'homa-ghost-*' -printf '%f\n' | sort)
+  remove_count=$((${#backups[@]}-MAX_BACKUPS))
+  if (( remove_count > 0 )); then
+    for path in "${backups[@]:0:remove_count}"; do
+      case "$path" in homa-ghost-*) find "$BACKUP_ROOT/$path" -depth -delete ;; esac
+    done
+  fi
+}
+
+backup_command() {
+  need_root
+  local quiet=0 print_path=0 no_prune=0 stamp backup staging suffix manifest
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quiet) quiet=1 ;;
+      --print-path) print_path=1 ;;
+      --no-prune) no_prune=1 ;;
+      *) fail "گزینه ناشناخته برای backup: $1" ;;
+    esac
+    shift
+  done
+  install -d -m 0755 -- "$BACKUP_ROOT"
+  stamp="$(date +%Y%m%d-%H%M%S-%N)"
+  staging="$(mktemp -d "${BACKUP_ROOT}/.homa-ghost-incomplete.XXXXXXXX")"
+  chmod 0700 -- "$staging"
+  cleanup_incomplete_backup() {
+    if [[ -n "$staging" && -d "$staging" ]]; then
+      case "$staging" in "$BACKUP_ROOT"/.homa-ghost-incomplete.*) find "$staging" -depth -delete ;; esac
+    fi
+  }
+  trap cleanup_incomplete_backup RETURN
+  suffix="${staging##*.}"
+  backup="${BACKUP_ROOT}/homa-ghost-${stamp}-${suffix}"
+  manifest="${staging}/manifest"
+  {
+    printf 'FORMAT=2\n'
+    printf 'VERSION=%s\n' "$VERSION"
+    printf 'CREATED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$manifest"
+  chmod 0600 -- "$manifest"
+  copy_if_present "$TEMPLATE_FILE" "${staging}/template/index.html" TEMPLATE_FILE "$manifest"
+  copy_if_present "$VENDOR_FILE" "${staging}/template/vendor/qrcode.js" VENDOR_FILE "$manifest"
+  copy_if_present "$TEMPLATE_CONFIG_FILE" "${staging}/template/config.js" TEMPLATE_CONFIG_FILE "$manifest"
+  copy_if_present "$CONFIG_FILE" "${staging}/config/config.env" CONFIG_FILE "$manifest"
+  copy_if_present "$ENV_FILE" "${staging}/marzban.env" ENV_FILE "$manifest"
+  copy_if_present "$MANAGER_BIN" "${staging}/bin/homa-sub" MANAGER_BIN "$manifest"
+  mv -- "$staging" "$backup"
+  staging=""
+  LAST_BACKUP="$backup"
+  if [[ $no_prune -eq 0 ]]; then prune_backups; fi
+  if [[ $print_path -eq 1 ]]; then printf '%s\n' "$backup"; elif [[ $quiet -eq 0 ]]; then say "بکاپ ساخته شد: $backup"; fi
+  trap - RETURN
+  unset -f cleanup_incomplete_backup
+}
+
+restore_one() {
+  local present="$1" backup_file="$2" destination="$3" mode="$4"
+  if [[ "$present" == 1 ]]; then
+    [[ -f "$backup_file" ]] || fail "بکاپ ناقص است: $backup_file"
+    install -D -m "$mode" -- "$backup_file" "$destination"
+    cmp -s -- "$backup_file" "$destination" || fail "بازیابی فایل کامل نشد: $destination"
+  else
+    rm -f -- "$destination"
+    [[ ! -e "$destination" && ! -L "$destination" ]] || fail "حذف فایل هنگام بازیابی کامل نشد: $destination"
+  fi
+}
+
+validate_backup() {
+  local backup="$1" manifest flag relative canonical_backup canonical_file digest actual
+  [[ -d "$backup" && ! -L "$backup" ]] || fail "پوشه بکاپ معتبر نیست."
+  canonical_backup="$(realpath -e -- "$backup")" || fail "مسیر بکاپ قابل بررسی نیست."
+  manifest="${backup}/manifest"
+  [[ -f "$manifest" && ! -L "$manifest" ]] || fail "manifest بکاپ معتبر نیست."
+  [[ "$(manifest_value FORMAT "$manifest")" == 2 ]] || fail "فرمت بکاپ پشتیبانی نمی‌شود."
+  while IFS=: read -r flag relative; do
+    local present
+    present="$(manifest_value "$flag" "$manifest")"
+    [[ "$present" == 0 || "$present" == 1 ]] || fail "manifest بکاپ برای ${flag} خراب است."
+    digest="$(manifest_value "${flag}_SHA256" "$manifest")"
+    if [[ "$present" == 1 ]]; then
+      [[ -f "${backup}/${relative}" && ! -L "${backup}/${relative}" ]] || fail "بکاپ ناقص است: ${relative}"
+      canonical_file="$(realpath -e -- "${backup}/${relative}")" || fail "مسیر فایل بکاپ قابل بررسی نیست: ${relative}"
+      case "$canonical_file" in "$canonical_backup"/*) ;; *) fail "فایل بکاپ از پوشه مجاز خارج شده است: ${relative}" ;; esac
+      [[ "$digest" =~ ^[0-9A-Fa-f]{64}$ ]] || fail "checksum فایل بکاپ معتبر نیست: ${relative}"
+      actual="$(sha256sum "${backup}/${relative}" | cut -d' ' -f1)"
+      [[ "$actual" == "$digest" ]] || fail "checksum فایل بکاپ تطابق ندارد: ${relative}"
+    else
+      [[ -z "$digest" ]] || fail "manifest بکاپ برای فایل غایب خراب است: ${relative}"
+    fi
+  done <<'BACKUP_FILES'
+TEMPLATE_FILE:template/index.html
+VENDOR_FILE:template/vendor/qrcode.js
+TEMPLATE_CONFIG_FILE:template/config.js
+CONFIG_FILE:config/config.env
+ENV_FILE:marzban.env
+MANAGER_BIN:bin/homa-sub
+BACKUP_FILES
+}
+
+restore_from() {
+  local backup="$1" manifest
+  manifest="${backup}/manifest"
+  validate_backup "$backup"
+  restore_one "$(manifest_value TEMPLATE_FILE "$manifest")" "${backup}/template/index.html" "$TEMPLATE_FILE" 0644
+  restore_one "$(manifest_value VENDOR_FILE "$manifest")" "${backup}/template/vendor/qrcode.js" "$VENDOR_FILE" 0644
+  restore_one "$(manifest_value TEMPLATE_CONFIG_FILE "$manifest")" "${backup}/template/config.js" "$TEMPLATE_CONFIG_FILE" 0644
+  restore_one "$(manifest_value CONFIG_FILE "$manifest")" "${backup}/config/config.env" "$CONFIG_FILE" 0600
+  restore_one "$(manifest_value ENV_FILE "$manifest")" "${backup}/marzban.env" "$ENV_FILE" 0600
+  restore_one "$(manifest_value MANAGER_BIN "$manifest")" "${backup}/bin/homa-sub" "$MANAGER_BIN" 0755
+}
+
+latest_backup() {
+  local candidate latest=""
+  while IFS= read -r candidate; do
+    [[ -f "$candidate/manifest" ]] || continue
+    grep -qx 'FORMAT=2' "$candidate/manifest" || continue
+    latest="$candidate"
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'homa-ghost-*' -printf '%p\n' 2>/dev/null | sort)
+  printf '%s' "$latest"
+}
+
+restore_command() {
+  need_root
+  local target="" yes=0 no_backup=0 no_restart=0 safety=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --path) shift; [[ $# -gt 0 ]] || fail "مسیر بکاپ وارد نشده است."; target="$1" ;;
+      --yes) yes=1 ;;
+      --no-backup) no_backup=1 ;;
+      --no-restart) no_restart=1 ;;
+      *) fail "گزینه ناشناخته برای restore: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "$target" ]] || target="$(latest_backup)"
+  [[ -n "$target" && -d "$target" ]] || fail "هیچ بکاپ معتبری پیدا نشد."
+  local canonical_root canonical_target
+  canonical_root="$(realpath -e -- "$BACKUP_ROOT")" || fail "پوشه بکاپ قابل بررسی نیست."
+  canonical_target="$(realpath -e -- "$target")" || fail "مسیر بکاپ قابل بررسی نیست."
+  case "$canonical_target" in "$canonical_root"/homa-ghost-*) ;; *) fail "مسیر بکاپ خارج از پوشه مجاز است." ;; esac
+  target="$canonical_target"
+  if [[ $yes -eq 0 ]]; then
+    printf 'بکاپ %s بازیابی شود؟ [y/N]: ' "$target"
+    read -r answer
+    [[ "$answer" =~ ^[Yy]$ ]] || { say "عملیات لغو شد."; return 0; }
+  fi
+  if [[ $no_backup -eq 0 ]]; then
+    backup_command --quiet --no-prune
+    safety="$LAST_BACKUP"
+  fi
+  restore_failure() {
+    local exit_code=$?
+    trap - ERR
+    if [[ -n "$safety" ]]; then
+      restore_from "$safety" || true
+      restart_marzban || true
+    fi
+    warn "بازیابی کامل نشد؛ برای حفظ وضعیت قبلی تلاش شد."
+    exit "$exit_code"
+  }
+  trap restore_failure ERR
+  restore_from "$target"
+  trap - ERR
+  unset -f restore_failure
+  if [[ $no_restart -eq 0 ]] && ! restart_marzban; then
+    if [[ -n "$safety" ]]; then restore_from "$safety"; restart_marzban || true; fi
+    fail "مرزبان بعد از بازیابی بالا نیامد؛ وضعیت قبل از عملیات برگردانده شد."
+  fi
+  prune_backups
+  say "بازیابی با موفقیت انجام شد: $target"
+}
+
+configure_command() {
+  need_root
+  ensure_config
+  local brand support channel color logo renewal interactive=1 no_restart=0 no_backup=0 reset=0
+  brand="$(config_get BRAND_NAME)"; support="$(config_get SUPPORT_URL)"; channel="$(config_get CHANNEL_URL)"
+  color="$(config_get PRIMARY_COLOR)"; logo="$(config_get LOGO_URL)"; renewal="$(config_get RENEWAL_MESSAGE)"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --brand) shift; [[ $# -gt 0 ]] || fail "مقدار --brand وارد نشده است."; brand="$1"; interactive=0 ;;
+      --support) shift; [[ $# -gt 0 ]] || fail "مقدار --support وارد نشده است."; support="$1"; interactive=0 ;;
+      --channel) shift; [[ $# -gt 0 ]] || fail "مقدار --channel وارد نشده است."; channel="$1"; interactive=0 ;;
+      --color) shift; [[ $# -gt 0 ]] || fail "مقدار --color وارد نشده است."; color="$1"; interactive=0 ;;
+      --logo) shift; [[ $# -gt 0 ]] || fail "مقدار --logo وارد نشده است."; logo="$1"; interactive=0 ;;
+      --renewal-message) shift; [[ $# -gt 0 ]] || fail "مقدار پیام وارد نشده است."; renewal="$1"; interactive=0 ;;
+      --non-interactive) interactive=0 ;;
+      --no-restart) no_restart=1 ;;
+      --no-backup) no_backup=1 ;;
+      --reset) reset=1; interactive=0 ;;
+      *) fail "گزینه ناشناخته برای configure: $1" ;;
+    esac
+    shift
+  done
+  if [[ $reset -eq 1 ]]; then
+    brand="$DEFAULT_BRAND_NAME"; support="$DEFAULT_SUPPORT_URL"; channel="$DEFAULT_CHANNEL_URL"
+    color="$DEFAULT_PRIMARY_COLOR"; logo="$DEFAULT_LOGO_URL"; renewal="$DEFAULT_RENEWAL_MESSAGE"
+  fi
+  if [[ $interactive -eq 1 ]]; then
+    local input
+    say "برای نگه‌داشتن مقدار فعلی فقط Enter بزن. برای حذف لینک لوگو یک خط تیره (-) وارد کن."
+    printf 'نام برند [%s]: ' "$brand"; IFS= read -r input || true; [[ -n "$input" ]] && brand="$input"
+    printf 'لینک پشتیبانی [%s]: ' "$support"; IFS= read -r input || true; [[ -n "$input" ]] && support="$input"
+    printf 'لینک کانال [%s]: ' "$channel"; IFS= read -r input || true; [[ -n "$input" ]] && channel="$input"
+    printf 'رنگ اصلی [%s]: ' "$color"; IFS= read -r input || true; [[ -n "$input" ]] && color="$input"
+    printf 'لینک HTTPS لوگو [%s]: ' "${logo:-بدون لوگو}"; IFS= read -r input || true; [[ "$input" == - ]] && logo="" || { [[ -n "$input" ]] && logo="$input"; }
+    printf 'متن پیام تمدید [%s]: ' "$renewal"; IFS= read -r input || true; [[ -n "$input" ]] && renewal="$input"
+  fi
+  validate_values "$brand" "$support" "$channel" "$color" "$logo" "$renewal"
+  local safety=""
+  if [[ $no_backup -eq 0 ]]; then backup_command --quiet --no-prune; safety="$LAST_BACKUP"; fi
+  configure_failure() {
+    local exit_code=$?
+    trap - ERR
+    if [[ -n "$safety" ]]; then restore_from "$safety"; restart_marzban || true; fi
+    warn "ذخیره تنظیمات کامل نشد؛ تنظیمات قبلی بازیابی شد."
+    exit "$exit_code"
+  }
+  trap configure_failure ERR
+  write_config "$brand" "$support" "$channel" "$color" "$logo" "$renewal"
+  render_config
+  trap - ERR
+  unset -f configure_failure
+  if [[ $no_restart -eq 0 ]] && ! restart_marzban; then
+    if [[ -n "$safety" ]]; then restore_from "$safety"; restart_marzban || true; fi
+    fail "مرزبان بعد از تغییر تنظیمات بالا نیامد؛ تنظیمات قبلی بازیابی شد."
+  fi
+  prune_backups
+  say "تنظیمات ذخیره شد."
+}
+
+status_command() {
+  local installed="خیر" detected="—"
+  if [[ -f "$TEMPLATE_FILE" ]]; then
+    installed="بله"
+    detected="$(grep -oE 'version:"[0-9.]+"' "$TEMPLATE_FILE" | head -n1 | cut -d'"' -f2 || true)"
+    [[ -n "$detected" ]] || detected="نامشخص"
+  fi
+  say "Homa Ghost Subscription"
+  say "نسخه ابزار: $VERSION"
+  say "قالب نصب است: $installed"
+  say "نسخه قالب: $detected"
+  say "مسیر قالب: $TEMPLATE_DIR"
+  say "مسیر تنظیمات: $CONFIG_FILE"
+  say "برند: $(config_get BRAND_NAME)"
+  say "پشتیبانی: $(config_get SUPPORT_URL)"
+}
+
+doctor_command() {
+  local quiet=0 errors=0 warnings=0
+  [[ ${1:-} == --quiet ]] && quiet=1
+  check_file() { if [[ -s "$1" ]]; then [[ $quiet -eq 1 ]] || say "[OK] $2"; else say "[FAIL] $2"; errors=$((errors+1)); fi; }
+  check_file "$TEMPLATE_FILE" "فایل اصلی قالب"
+  check_file "$VENDOR_FILE" "QR داخلی"
+  check_file "$TEMPLATE_CONFIG_FILE" "تنظیمات رندرشده"
+  check_file "$CONFIG_FILE" "تنظیمات پایدار"
+  check_file "$ENV_FILE" "فایل env مرزبان"
+  if [[ -f "$TEMPLATE_FILE" ]]; then
+    grep -Fq 'subscription/vendor/qrcode.js' "$TEMPLATE_FILE" || { say "[FAIL] include مربوط به QR"; errors=$((errors+1)); }
+    grep -Fq 'subscription/config.js' "$TEMPLATE_FILE" || { say "[FAIL] include مربوط به تنظیمات"; errors=$((errors+1)); }
+    grep -Fq '{{ user.username }}' "$TEMPLATE_FILE" || { say "[FAIL] فیلد Jinja نام کاربری"; errors=$((errors+1)); }
+  fi
+  if [[ -f "$TEMPLATE_CONFIG_FILE" ]]; then
+    grep -Fq 'HOMA_GHOST_CUSTOM_CONFIG' "$TEMPLATE_CONFIG_FILE" || { say "[FAIL] ساختار config.js"; errors=$((errors+1)); }
+  fi
+  if [[ -L "$CONFIG_FILE" ]]; then say "[FAIL] فایل تنظیمات پایدار symlink است"; errors=$((errors+1)); fi
+  if [[ -f "$ENV_FILE" ]]; then
+    grep -qE '^CUSTOM_TEMPLATES_DIRECTORY=' "$ENV_FILE" || { say "[FAIL] CUSTOM_TEMPLATES_DIRECTORY"; errors=$((errors+1)); }
+    grep -qE '^SUBSCRIPTION_PAGE_TEMPLATE=' "$ENV_FILE" || { say "[FAIL] SUBSCRIPTION_PAGE_TEMPLATE"; errors=$((errors+1)); }
+  fi
+  if [[ ! -x "$MANAGER_BIN" ]]; then [[ $quiet -eq 1 ]] || say "[WARN] فرمان homa-sub در مسیر نهایی نصب نیست"; warnings=$((warnings+1)); fi
+  if ! command -v marzban >/dev/null 2>&1; then [[ $quiet -eq 1 ]] || say "[WARN] دستور marzban پیدا نشد"; warnings=$((warnings+1)); fi
+  if (( errors > 0 )); then say "نتیجه: ${errors} خطای جدی و ${warnings} هشدار"; return 1; fi
+  [[ $quiet -eq 1 ]] || say "نتیجه: سالم (${warnings} هشدار)"
+}
+
+update_command() {
+  need_root
+  command -v curl >/dev/null 2>&1 || fail "curl نصب نیست."
+  local temp
+  temp="$(mktemp -t homa-ghost-update.XXXXXXXX.sh)"
+  trap 'rm -f -- "$temp"' RETURN
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --connect-timeout 15 --max-time 120 "$ONLINE_INSTALLER_URL" -o "$temp"
+  bash -n "$temp"
+  HOMA_GHOST_NONINTERACTIVE=1 \
+  HOMA_GHOST_REPOSITORY="$REPOSITORY" \
+  HOMA_GHOST_TEMPLATE_DIR="$TEMPLATE_DIR" \
+  HOMA_GHOST_CONFIG_DIR="$CONFIG_DIR" \
+  HOMA_GHOST_BACKUP_ROOT="$BACKUP_ROOT" \
+  HOMA_GHOST_BIN_PATH="$MANAGER_BIN" \
+  MARZBAN_ENV_FILE="$ENV_FILE" \
+  bash "$temp"
+  rm -f -- "$temp"
+  trap - RETURN
+}
+
+delete_env_key() {
+  local key="$1" temp
+  [[ -f "$ENV_FILE" ]] || return 0
+  temp="$(mktemp "${ENV_FILE}.XXXXXXXX")"
+  grep -vE "^[[:space:]#]*${key}=" "$ENV_FILE" > "$temp" || true
+  install -m 0600 -- "$temp" "$ENV_FILE"
+  rm -f -- "$temp"
+}
+
+uninstall_command() {
+  need_root
+  local yes=0
+  [[ ${1:-} == --yes ]] && yes=1
+  if [[ $yes -eq 0 ]]; then
+    printf 'قالب حذف شود؟ قبل از حذف بکاپ ساخته می‌شود. [y/N]: '
+    read -r answer
+    [[ "$answer" =~ ^[Yy]$ ]] || { say "عملیات لغو شد."; return 0; }
+  fi
+  backup_command --quiet --no-prune
+  local safety="$LAST_BACKUP"
+  rm -f -- "$TEMPLATE_FILE" "$VENDOR_FILE" "$TEMPLATE_CONFIG_FILE" "$CONFIG_FILE"
+  delete_env_key SUBSCRIPTION_PAGE_TEMPLATE
+  if ! restart_marzban; then restore_from "$safety"; restart_marzban || true; fail "حذف کامل نشد و نسخه قبلی بازیابی شد."; fi
+  prune_backups
+  say "قالب حذف شد. بکاپ قابل بازیابی: $safety"
+  rm -f -- "$MANAGER_BIN"
+}
+
+show_help() {
+  cat <<'HELP'
+Homa Ghost Subscription Manager
+
+Usage: homa-sub <command>
+
+  status                 نمایش وضعیت نصب
+  configure [options]    ویزارد یا تنظیم غیرتعاملی
+  update                 بروزرسانی امن با حفظ تنظیمات
+  backup                 ساخت بکاپ دستی
+  restore|rollback       بازیابی آخرین بکاپ
+  doctor                 عیب‌یابی نصب
+  uninstall              حذف امن پس از ساخت بکاپ
+  version                نمایش نسخه
+  menu                   منوی فارسی
+HELP
+}
+
+menu_command() {
+  while true; do
+    printf '\033[2J\033[H'
+    say "HOMA GHOST SUBSCRIPTION · v${VERSION}"
+    say "1) وضعیت نصب"
+    say "2) شخصی‌سازی قالب"
+    say "3) بروزرسانی"
+    say "4) ساخت بکاپ"
+    say "5) بازگردانی آخرین بکاپ"
+    say "6) عیب‌یابی"
+    say "7) حذف قالب"
+    say "0) خروج"
+    printf 'انتخاب: '
+    read -r choice
+    case "$choice" in
+      1) status_command ;;
+      2) configure_command ;;
+      3) update_command ;;
+      4) backup_command ;;
+      5) restore_command ;;
+      6) doctor_command || true ;;
+      7) uninstall_command; return ;;
+      0) return ;;
+      *) say "انتخاب نامعتبر است." ;;
+    esac
+    printf '\nبرای ادامه Enter بزن...'
+    read -r _
+  done
+}
+
+command_name="${1:-menu}"
+if [[ $# -gt 0 ]]; then shift; fi
+case "$command_name" in
+  status) status_command "$@" ;;
+  configure|config) configure_command "$@" ;;
+  render-config) render_config ;;
+  prune-backups) need_root; prune_backups ;;
+  update) update_command "$@" ;;
+  backup) backup_command "$@" ;;
+  restore|rollback) restore_command "$@" ;;
+  doctor) doctor_command "$@" ;;
+  uninstall) uninstall_command "$@" ;;
+  version|--version|-v) say "$VERSION" ;;
+  menu) menu_command ;;
+  help|--help|-h) show_help ;;
+  *) show_help >&2; exit 2 ;;
+esac

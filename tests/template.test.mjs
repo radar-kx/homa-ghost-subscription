@@ -15,8 +15,10 @@ const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.dirname(TESTS_DIR);
 const templateSource = await readFile(path.join(PROJECT_DIR, "index.html"), "utf8");
 const qrVendor = await readFile(path.join(PROJECT_DIR, "vendor", "qrcode.js"), "utf8");
+const configSource = await readFile(path.join(PROJECT_DIR, "config.js"), "utf8");
 const localInstaller = await readFile(path.join(PROJECT_DIR, "install.sh"), "utf8");
 const onlineInstaller = await readFile(path.join(PROJECT_DIR, "install-online.sh"), "utf8");
+const managerSource = await readFile(path.join(PROJECT_DIR, "homa-sub"), "utf8");
 
 const userAgents = {
   Android: "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36",
@@ -80,13 +82,14 @@ async function createPage({
   fetchImpl = successFetch,
   seedStorage,
   prefersLight = false,
+  configOverride = configSource,
 } = {}) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => errors.push(error));
   virtualConsole.on("error", (error) => errors.push(error));
 
-  const html = renderTemplate(templateSource, fixture, qrVendor);
+  const html = renderTemplate(templateSource, fixture, qrVendor, configOverride);
   const pageUrl = new URL(fixture.subscriptionUrl, "https://panel.test").href;
   const dom = new JSDOM(html, {
     url: pageUrl,
@@ -149,6 +152,7 @@ test("template uses official subscription fields and keeps QR code local", () =>
   }
   assert.doesNotMatch(templateSource, /<script[^>]+src=/i);
   assert.match(templateSource, /subscription\/vendor\/qrcode\.js/);
+  assert.match(templateSource, /subscription\/config\.js/);
 });
 
 test("responsive stylesheet covers desktop, tablet, mobile, and 320 px screens", () => {
@@ -163,7 +167,7 @@ test("responsive stylesheet covers desktop, tablet, mobile, and 320 px screens",
 
 test("every account state renders without unresolved Jinja syntax", () => {
   for (const [name, fixture] of Object.entries(fixtures)) {
-    const html = renderTemplate(templateSource, fixture, qrVendor);
+    const html = renderTemplate(templateSource, fixture, qrVendor, configSource);
     assert.doesNotMatch(html, /{{|{%/, `${name} left unresolved Jinja syntax`);
     assert.match(html, new RegExp(fixture.username));
   }
@@ -183,6 +187,9 @@ test("active account initializes account data, QR, clients, configs, and chart",
   assert.equal(page.document.querySelectorAll("#chartWrap .point").length, 7);
   assert.match(page.document.querySelector("#chartSource").textContent, /داده واقعی مرزبان/);
   assert.equal(page.document.querySelector("#topNode").textContent, "Master");
+  assert.doesNotMatch(page.document.querySelector("#dailyAverage").textContent, /داده کافی/);
+  assert.doesNotMatch(page.document.querySelector("#depletionEstimate").textContent, /داده کافی/);
+  assert.equal(page.document.querySelector("#renewalCard").hidden, true);
   assert.equal(page.errors.length, 0);
   page.dom.window.close();
 });
@@ -217,12 +224,73 @@ test("limited, expired, disabled, unlimited, and on-hold states are accurate", a
     assert.equal(page.document.querySelector("#statusText").textContent, status);
     if (fixture === fixtures.limited) assert.equal(page.document.querySelector("#usagePercent").textContent, secondary);
     if (fixture === fixtures.expired || fixture === fixtures.on_hold) assert.equal(page.document.querySelector("#daysLeft").textContent, secondary);
+    if ([fixtures.limited, fixtures.expired, fixtures.disabled].includes(fixture)) {
+      assert.equal(page.document.querySelector("#renewalCard").hidden, false);
+    }
     if (fixture === fixtures.unlimited) {
       assert.equal(page.document.querySelector("#usagePercent").textContent, secondary);
       assert.match(page.document.querySelector("#remainingText").textContent, /نامحدود/);
+      assert.equal(page.document.querySelector("#depletionEstimate").textContent, "حجم نامحدود");
     }
     page.dom.window.close();
   }
+});
+
+test("persistent custom configuration changes brand, support, color, logo, and import name", async () => {
+  const customConfig = `window.HOMA_GHOST_CUSTOM_CONFIG={
+    brandName:"برند آزمایشی",
+    supportUrl:"https://t.me/UnitSupport",
+    channelUrl:"https://t.me/UnitChannel",
+    primaryColor:"#123ABC",
+    logoUrl:"https://example.test/logo.png",
+    renewalMessage:"تمدید {username} با وضعیت {status}"
+  };`;
+  const page = await createPage({ configOverride: customConfig });
+  assert.equal(page.window.HomaGhost.version, "2.3.0");
+  assert.equal(page.document.querySelector("#brandName").textContent, "برند آزمایشی");
+  assert.equal(page.document.documentElement.style.getPropertyValue("--brand"), "#123ABC");
+  assert.equal(page.document.querySelector("#brandLogo").src, "https://example.test/logo.png");
+  assert.equal(page.document.querySelector("#supportLink").href, "https://t.me/UnitSupport");
+  assert.equal(page.document.querySelector("#channelLink").href, "https://t.me/UnitChannel");
+  const hiddify = page.window.HomaGhost.CLIENTS.find((client) => client.id === "hiddify");
+  assert.match(decodeURIComponent(page.window.HomaGhost.deepLink(hiddify)), /برند آزمایشی/);
+  assert.equal(page.errors.length, 0);
+  page.dom.window.close();
+});
+
+test("smart renewal handles critical states and never puts subscription secrets in its draft", async () => {
+  const configOverride = `window.HOMA_GHOST_CUSTOM_CONFIG={supportUrl:"https://t.me/RenewSupport",renewalMessage:"سلام، تمدید {username}؛ وضعیت {status}"};`;
+  for (const fixture of [fixtures.limited, fixtures.expired, fixtures.disabled]) {
+    const page = await createPage({ fixture, configOverride });
+    const draft = page.window.HomaGhost.renewalDraft();
+    assert.match(draft, new RegExp(fixture.username));
+    assert.doesNotMatch(draft, /token|vless:|trojan:|\/sub\//i);
+    assert.equal(page.document.querySelector("#renewalCard").hidden, false);
+    assert.match(page.document.querySelector("#renewalCta").href, /^https:\/\/t\.me\/RenewSupport\?text=/);
+    page.dom.window.close();
+  }
+
+  const nearLimit = { ...fixtures.active, username: "near_limit", used: 46 * 1024 ** 3 };
+  const page = await createPage({ fixture: nearLimit, configOverride });
+  assert.equal(page.document.querySelector("#renewalCard").hidden, false);
+  assert.match(page.document.querySelector("#renewalBadge").textContent, /۹۰/);
+  assert.match(page.document.querySelector("#usageAlert").textContent, /بحرانی/);
+  page.dom.window.close();
+});
+
+test("safe diagnostic report contains useful state and excludes URLs, tokens, and configs", async () => {
+  const page = await createPage({
+    configOverride: 'window.HOMA_GHOST_CUSTOM_CONFIG={brandName:"https://brand.example",supportUrl:"https://t.me/TestSupport"};',
+  });
+  const report = page.window.HomaGhost.diagnosticReport();
+  assert.match(report, /mahdi_test/);
+  assert.match(report, /نسخه قالب: 2\.3\.0/);
+  assert.match(report, /اندروید/);
+  assert.doesNotMatch(report, /test-token|\/sub\/|vless:|trojan:|https?:\/\//i);
+  page.document.querySelector("#copyDiagnostic").click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(page.window.__copiedText, report);
+  page.dom.window.close();
 });
 
 test("tutorial center supports mouse and RTL keyboard navigation", async () => {
@@ -385,19 +453,46 @@ test("page has no critical automated accessibility violations", async () => {
   page.dom.window.close();
 });
 
-test("installer shell syntax is valid", () => {
-  execFileSync("bash", ["-n", path.join(PROJECT_DIR, "install.sh")]);
+test("installer, online bootstrap, manager, and integration scripts have valid shell syntax", () => {
+  for (const script of ["install.sh", "install-online.sh", "homa-sub", "tests/installer.integration.sh", "tests/online-installer.integration.sh"]) {
+    execFileSync("bash", ["-n", path.join(PROJECT_DIR, script)]);
+  }
   assert.match(localInstaller, /HOMA_GHOST_TEMPLATE_DIR/);
   assert.match(localInstaller, /HOMA_GHOST_BACKUP_ROOT/);
+  assert.match(localInstaller, /HOMA_GHOST_CONFIG_DIR/);
+  assert.match(localInstaller, /VERSION="2\.3\.0"/);
+  assert.match(managerSource, /VERSION="2\.3\.0"/);
+  assert.match(managerSource, /configure\|config/);
+  assert.match(managerSource, /doctor/);
+  assert.match(managerSource, /restore\|rollback/);
 });
 
-test("one-line installer verifies and hands off the official v2.2.0 package", () => {
-  execFileSync("bash", ["-n", path.join(PROJECT_DIR, "install-online.sh")]);
-  assert.match(onlineInstaller, /VERSION="\$\{HOMA_GHOST_VERSION:-2\.2\.0\}"/);
+test("one-line installer verifies and hands off the official v2.3.0 package", () => {
+  assert.match(onlineInstaller, /VERSION="\$\{HOMA_GHOST_VERSION:-2\.3\.0\}"/);
   assert.match(onlineInstaller, /radar-kx\/homa-ghost-subscription/);
   assert.match(onlineInstaller, /sha256sum -c/);
   assert.match(onlineInstaller, /unzip -q/);
+  assert.match(onlineInstaller, /unzip -Z1/);
   assert.match(onlineInstaller, /bash "\$INSTALLER"/);
+  assert.match(onlineInstaller, /HOMA_GHOST_NONINTERACTIVE/);
+});
+
+test("installer lifecycle preserves settings and supports backup, rollback, migration, and uninstall", () => {
+  execFileSync("bash", [path.join(PROJECT_DIR, "tests", "installer.integration.sh")], {
+    cwd: PROJECT_DIR,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 30_000,
+  });
+});
+
+test("online installer accepts a valid release and rejects unsafe release artifacts", () => {
+  execFileSync("bash", [path.join(PROJECT_DIR, "tests", "online-installer.integration.sh")], {
+    cwd: PROJECT_DIR,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 60_000,
+  });
 });
 
 test("HTTP smoke server serves every state and auxiliary endpoint", async () => {

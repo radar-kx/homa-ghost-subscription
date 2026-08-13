@@ -2,6 +2,8 @@
 
 Homa Ghost 2 was implemented from scratch. The sources below were used to verify Marzban compatibility, current client availability, import URL formats, and useful subscription-page interaction patterns.
 
+The Marzban endpoints and both V2Box store listings were rechecked against their official sources on 2026-08-13 for the v2.3.0 release.
+
 ## Marzban
 
 - Official custom subscription template guide: https://gozargah.github.io/marzban/en/docs/subscription

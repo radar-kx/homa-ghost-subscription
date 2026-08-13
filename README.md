@@ -1,27 +1,58 @@
 # Homa Ghost Subscription
 
-قالب مدرن، فارسی و کاملاً واکنش‌گرای صفحه سابسکریپشن **مرزبان** با دو پوسته تاریک و روشن، نمودار مصرف، QR داخلی، تست شبکه و مرکز آموزش کلاینت‌ها.
+قالب فارسی، مدرن و واکنش‌گرای صفحه سابسکریپشن **مرزبان** با نصب تک‌خطی، شخصی‌سازی پایدار، نمودار و پیش‌بینی مصرف، تمدید هوشمند، QR داخلی و آموزش ۹ کلاینت.
 
-[راهنمای فارسی کامل](README-FA.md) · [تغییرات نسخه‌ها](CHANGELOG.md) · [گزارش تست](QA-REPORT.md) · [منابع](SOURCES.md)
+[راهنمای کامل فارسی](README-FA.md) · [تغییرات نسخه‌ها](CHANGELOG.md) · [گزارش تست](QA-REPORT.md) · [منابع](SOURCES.md)
 
-## امکانات
+## نصب یا بروزرسانی با یک خط
 
-- طراحی Mobile-first برای موبایل، تبلت و دسکتاپ
-- تم تاریک و روشن با ذخیره انتخاب کاربر
+این خط را در ترمینال **سرور لینوکسی مرزبان** اجرا کن:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/radar-kx/homa-ghost-subscription/main/install-online.sh | sudo bash
+```
+
+همین یک دستور نسخه پایدار `v2.3.0` را دانلود می‌کند، SHA-256 و ساختار امن ZIP را بررسی می‌کند، از نسخه فعلی بکاپ می‌گیرد، قالب را نصب یا بروزرسانی می‌کند و مرزبان را ری‌استارت می‌کند. تنظیمات برند و پشتیبانی در بروزرسانی حفظ می‌شوند و اگر نصب شکست بخورد، وضعیت قبلی خودکار برمی‌گردد.
+
+اگر از قبل با کاربر `root` وارد شده‌ای و `sudo` نداری، انتهای دستور را به `bash` تغییر بده. این فرمان در PowerShell ویندوز اجرا نمی‌شود؛ از SSH وارد سرور شو و آن را همان‌جا اجرا کن.
+
+## امکانات نسخه ۲.۳
+
+- طراحی Mobile-first برای موبایل، تبلت و دسکتاپ، با تم تاریک/روشن ماندگار
 - نمایش وضعیت فعال، اتمام حجم، انقضا، غیرفعال و در انتظار شروع
-- نمایش مصرف، حجم باقی‌مانده، تاریخ پایان، چرخه ریست و آخرین اتصال
-- نمودار واقعی مصرف ۷، ۱۴ و ۳۰ روزه از endpoint رسمی `/usage`
-- بروزرسانی اطلاعات حساب بدون Reload از `/info`
-- QR داخلی بدون وابستگی اجرایی به CDN
-- کپی لینک اشتراک، کانفیگ تکی و همه کانفیگ‌ها
+- نمودار واقعی ۷، ۱۴ و ۳۰ روزه از endpoint رسمی `/usage`
+- میانگین مصرف روزانه، تخمین زمان تمام‌شدن حجم و هشدار ۸۰/۹۰ درصد
+- پیشنهاد تمدید هوشمند بر اساس حجم، تاریخ پایان و وضعیت حساب
+- گزارش عیب‌یابی امن، بدون لینک سابسکریپشن، توکن یا کانفیگ
+- QR داخلی و کپی لینک/کانفیگ بدون وابستگی اجرایی به CDN
 - تشخیص Android، iOS، Windows، macOS و Linux
-- آموزش مرحله‌ای ۹ کلاینت و ورود یک‌کلیکی در کلاینت‌های پشتیبانی‌شده
-- V2Box برای Android و iPhone/iPad با لینک رسمی Google Play و App Store
+- آموزش ۹ کلاینت و ورود یک‌کلیکی در کلاینت‌های پشتیبانی‌شده
+- V2Box برای Android و iPhone/iPad با لینک رسمی فروشگاه‌ها
 - تست اختیاری دانلود، آپلود، پینگ و جیتر
-- نصب یا بروزرسانی کامل قالب فقط با یک خط کد
-- دانلود خودکار بسته رسمی و بررسی SHA-256 پیش از نصب
-- نصب‌کننده با بکاپ خودکار و Rollback در صورت شکست
-- بدون ردیاب، تبلیغات یا کتابخانه ظاهری خارجی
+- ویزارد شخصی‌سازی نام برند، پشتیبانی، کانال، رنگ، لوگو و پیام تمدید
+- فرمان مدیریتی `homa-sub` برای وضعیت، تنظیم، بروزرسانی، بکاپ، بازیابی، عیب‌یابی و حذف
+- نگه‌داری تنظیمات بین بروزرسانی‌ها و حفظ حداکثر سه بکاپ سالم
+
+## مدیریت بعد از نصب
+
+منوی فارسی:
+
+```bash
+sudo homa-sub
+```
+
+فرمان‌های پرکاربرد:
+
+```bash
+sudo homa-sub configure   # شخصی‌سازی قالب
+sudo homa-sub update      # بروزرسانی امن با حفظ تنظیمات
+sudo homa-sub doctor      # بررسی سلامت نصب
+sudo homa-sub backup      # ساخت بکاپ دستی
+sudo homa-sub rollback    # بازگشت به آخرین بکاپ
+sudo homa-sub status      # نمایش وضعیت و نسخه
+```
+
+تنظیمات پایدار در `/etc/homa-ghost-subscription/config.env` نگه‌داری و هنگام هر بروزرسانی دوباره به `config.js` امن تبدیل می‌شوند.
 
 ## کلاینت‌های پشتیبانی‌شده
 
@@ -33,60 +64,21 @@
 | macOS | Hiddify، Happ، v2rayN، Clash Verge Rev |
 | Linux | Hiddify، Happ، v2rayN، Clash Verge Rev، v2rayA |
 
-## نصب تک‌خطی روی سرور مرزبان
-
-روی سرور لینوکسی مرزبان فقط همین یک خط را اجرا کن:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/radar-kx/homa-ghost-subscription/main/install-online.sh | sudo bash
-```
-
-با همین یک خط، آخرین بسته پایدار `v2.2.0` دانلود می‌شود، صحت آن با SHA-256 بررسی می‌شود، از قالب و تنظیمات فعلی بکاپ گرفته می‌شود، قالب جدید نصب می‌شود و مرزبان ری‌استارت می‌شود. اگر نصب شکست بخورد، نسخه قبلی به‌صورت خودکار برمی‌گردد.
-
-اگر از قبل با کاربر `root` وارد سرور شده‌ای و `sudo` نصب نیست، انتهای همان دستور را از `sudo bash` به `bash` تغییر بده. این دستور مخصوص ترمینال لینوکس سرور است و در PowerShell ویندوز اجرا نمی‌شود.
-
 ## نصب دستی
 
-اگر نصب دستی را ترجیح می‌دهی، فایل ZIP نسخه `v2.2.0` را دانلود و استخراج کن:
-
-[دانلود Homa Ghost Subscription v2.2.0](dist/Homa-Ghost-Subscription-v2.2.0.zip) · [مشاهده SHA-256](dist/Homa-Ghost-Subscription-v2.2.0.zip.sha256)
+[دانلود Homa Ghost Subscription v2.3.0](dist/Homa-Ghost-Subscription-v2.3.0.zip) · [مشاهده SHA-256](dist/Homa-Ghost-Subscription-v2.3.0.zip.sha256)
 
 ```bash
-unzip Homa-Ghost-Subscription-v2.2.0.zip
-cd Homa-Ghost-Subscription-v2.2.0
+unzip Homa-Ghost-Subscription-v2.3.0.zip
+cd Homa-Ghost-Subscription-v2.3.0
 chmod +x install.sh
 sudo ./install.sh
 ```
 
-نصب‌کننده:
-
-1. فایل‌ها و ساختار قالب را بررسی می‌کند.
-2. از قالب فعلی، QR محلی و فایل `.env` بکاپ می‌گیرد.
-3. قالب را در `/var/lib/marzban/templates/subscription/` نصب می‌کند.
-4. متغیرهای لازم را در `/opt/marzban/.env` تنظیم می‌کند.
-5. مرزبان را ری‌استارت می‌کند و در صورت شکست نسخه قبلی را برمی‌گرداند.
-
-اگر فایل `.env` جای دیگری است:
+اگر فایل `.env` مرزبان در مسیر دیگری است:
 
 ```bash
 sudo MARZBAN_ENV_FILE="/path/to/.env" ./install.sh
-```
-
-## تنظیم پشتیبانی و برند
-
-قبل از نصب، در انتهای `index.html` مقدار `YourSupport` را با آیدی پشتیبانی خودت جایگزین کن:
-
-```js
-supportUrl: "https://t.me/YourSupport"
-```
-
-## تنظیمات مرزبان
-
-نصب‌کننده این مقادیر را به‌صورت خودکار تنظیم می‌کند:
-
-```env
-CUSTOM_TEMPLATES_DIRECTORY="/var/lib/marzban/templates/"
-SUBSCRIPTION_PAGE_TEMPLATE="subscription/index.html"
 ```
 
 ## تست توسعه
@@ -96,24 +88,24 @@ npm ci
 npm test
 ```
 
-نسخه `2.2.0` در ۱۷ سناریو شامل وضعیت‌های حساب، Jinja، QR، کلاینت‌ها، Deep Linkها، نمودار مصرف، تست شبکه، Clipboard، دو پوسته، HTML، دسترس‌پذیری، نصب‌کننده محلی، نصب تک‌خطی و HTTP smoke test بررسی شده است.
+نسخه `2.3.0` با ۲۲ سناریوی خودکار شامل وضعیت‌های حساب، Jinja، QR، کلاینت‌ها، پیش‌بینی و تمدید، گزارش امن، HTML، دسترس‌پذیری، نصب، حفظ تنظیمات، بکاپ، rollback، مهاجرت نسخه قدیمی، حذف، endpointهای مرزبان و بسته‌های انتشار ناامن بررسی می‌شود.
 
 ## فایل‌های مهم
 
 - `index.html`: قالب اصلی مرزبان
-- `install-online.sh`: دانلود، اعتبارسنجی و نصب تک‌خطی نسخه پایدار
-- `install.sh`: نصب، بکاپ و Rollback خودکار
+- `config.default.env`: تنظیمات پیش‌فرض پایدار
+- `homa-sub`: ابزار مدیریت نصب
+- `install-online.sh`: نصب تک‌خطی با اعتبارسنجی بسته
+- `install.sh`: نصب محلی، بکاپ و rollback
 - `vendor/qrcode.js`: تولید QR داخلی
-- `tests/`: تست‌های خودکار قالب و endpointها
-- `README-FA.md`: مستندات کامل فارسی
-- `QA-REPORT.md`: نتیجه کنترل کیفیت نسخه
+- `tests/`: تست‌های رابط و چرخه نصب
 
 ## نکته امنیتی
 
-لینک سابسکریپشن هر کاربر محرمانه است. آن را در Issue، Screenshot عمومی یا پیام‌های پشتیبانی منتشر نکن.
+لینک سابسکریپشن هر کاربر محرمانه است. آن را در Issue، اسکرین‌شات عمومی یا پیام پشتیبانی منتشر نکن. برای پشتیبانی از دکمه «کپی گزارش امن» داخل قالب استفاده کن.
 
 ## English summary
 
-Homa Ghost Subscription is a modern Persian Marzban subscription template featuring responsive dark/light themes, account status and quota cards, 7/14/30-day usage analytics, self-hosted QR generation, configuration tools, network tests, detailed client guides, and a checksum-verified one-line installer.
+Homa Ghost Subscription v2.3.0 is a Persian Marzban subscription template with responsive dark/light themes, persistent branding, smart renewal prompts, usage forecasting, safe diagnostics, self-hosted QR generation, nine client guides, and a checksum-verified one-line installer with backup and rollback support.
 
-See [README-FA.md](README-FA.md) for full installation and configuration details.
+See [README-FA.md](README-FA.md) for the complete Persian guide.

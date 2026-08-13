@@ -7,6 +7,7 @@ const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.dirname(TESTS_DIR);
 const TEMPLATE_PATH = path.join(PROJECT_DIR, "index.html");
 const QR_VENDOR_PATH = path.join(PROJECT_DIR, "vendor", "qrcode.js");
+const CONFIG_PATH = path.join(PROJECT_DIR, "config.js");
 const PORT = Number(process.env.HOMA_TEST_PORT || 4173);
 
 export const fixtures = {
@@ -116,7 +117,7 @@ function escapeHtml(value) {
   })[character]);
 }
 
-export function renderTemplate(source, fixture, qrVendor) {
+export function renderTemplate(source, fixture, qrVendor, configSource = "window.HOMA_GHOST_CUSTOM_CONFIG={};") {
   let html = source;
   html = renderConditional(
     html,
@@ -171,6 +172,7 @@ export function renderTemplate(source, fixture, qrVendor) {
 
   return html
     .replace('{% include "subscription/vendor/qrcode.js" %}', () => qrVendor)
+    .replace('{% include "subscription/config.js" %}', () => configSource)
     .replaceAll("https://speed.cloudflare.com/__down?bytes=5000000", "/__down?bytes=5000000")
     .replaceAll("https://speed.cloudflare.com/__down?bytes=1", "/__down?bytes=1")
     .replaceAll("https://speed.cloudflare.com/__up", "/__up");
@@ -254,12 +256,13 @@ export function createTestServer() {
   }
 
   if (url.pathname === "/" || url.pathname === "/index.html" || /\/sub\/[^/]+\/?$/.test(url.pathname)) {
-    const [source, qrVendor] = await Promise.all([
+    const [source, qrVendor, configSource] = await Promise.all([
       readFile(TEMPLATE_PATH, "utf8"),
       readFile(QR_VENDOR_PATH, "utf8"),
+      readFile(CONFIG_PATH, "utf8"),
     ]);
     const fixture = fixtureByToken || fixtures[url.searchParams.get("fixture")] || fixtures.active;
-    return send(res, 200, renderTemplate(source, fixture, qrVendor));
+    return send(res, 200, renderTemplate(source, fixture, qrVendor, configSource));
   }
 
   send(res, 404, "Not found", "text/plain; charset=utf-8");
